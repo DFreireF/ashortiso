@@ -2,53 +2,53 @@ import argparse
 import logging as log
 from ashortiso.version import __version__
 from iqtools import *
+import numpy as np
 
-
-def _cut_spectrogram(spec_to_cut, f1, f2, y1=None, y2=None):
-    xcen=(f1+f2-2*self.iq.center)/2
-    xspan=abs(f1-f2)
-    nxx, nzz, nyy= get_cut_spectrogram(spect_to_cut[0], spec_to_cut[1], spec_to_cut[2], xcen=xcen, xspan=xspan)
-    return (np.stack((nxx, nzz, nyy), axis=1)).reshape((len(nxx),3))
+class IsomerIdentification():
+    def __init__(self, filename,  inyection_time, time, fcen, fspan, lframes):
+        self.fcen=fcen
+        self.fspan=fspan
+        self.lframes=lframes
+        self.itime=inyection_time
+        self.tdeath=time
+        self.filename=filename
+        
+    def get_energy_content(self, skip):
+        xx,yy,zz= self._create_spectrogram(skip)
+        nxx,nyy,nzz=get_cut_spectrogram(xx, yy, zz, xcen=xcen, xspan=xspan)
+        axx, ayy, azz = get_averaged_spectrogram(nxx, nyy, nzz, len(nxx[:,0]))
+        return np.average(azz[0,:])
     
-def _create_spectrogram(self, howlong_t, where_t, lf, method=None):
-    nframes=int(howlong_t*self.iq.fs/lf)
-    sframes=int(where_t*self.iq.fs/lf)
-    self.iq.read(nframes=nframes, lframes=lf, sframes=sframes)
-    iq.method='mtm' #'fft', 'mtm', 'welch'                                                                                                                                                                     
-    if method: iq.method = method
-    xx, yy, zz = self.iq.get_spectrogram(nframes,lframes)
-    return (np.stack((xx, zz, yy), axis=1)).reshape((len(xx),3))
+    def _create_spectrogram(self, skip, method=None):
+        nframes=int(self.tdeath*self.iq.fs/self.lframes)
+        sframes=int(skip*self.iq.fs/self.lframes)
+        self.iq.read(nframes=nframes, lframes=self.lframes, sframes=sframes)
+        iq.method='mtm' #'fft', 'mtm', 'welch'
+        if method: self.iq.method = method
+        return self.iq.get_spectrogram(nframes, self.lframes) #f=x[t,p], t=y[p,f], p=z[t,f]
 
-def method1(filename, lframes, inject_t):
-    self.iq = get_iq_object(filename)
-    self.iq.read_samples(1)
-    time=inject_t-2
-    skip_time=0
-    bg1 = self._create_spectrogram(time, skip_time, lframes)
-    nbg1= self._cut_spectrogram(bg1, f1, f2)
-
-    time=0.100 #100ms of data                                                                                                                                                                                  
-    skip_time=inject_t
-    interest_data = self._create_spectrogram(time, skip_time, lframes)
-    idata= self._cut_spectrogram(interest_data, f1, f2)
+    def method1(self):
+        self.iq = get_iq_object(self.filename)
+        self.iq.read_samples(1)
+        energy_isomer= self.get_energy_content(self.itime)
+        energy_background=self.get_energy_content(self.itime+2)
+        return np.abs(energy_isomer-energy_background)
     
-    time=inject_t-2
-    skip_time=inject_t+1
-    bg2 = ImportData._create_spectrogram(time, skip_time, lframes)
-    nbg2= self._cut_spectrogram(bg2, f1, f2)
-
-    self.background=
+    @staticmethod
+    def isomer_or_not(energy_isomer, energy_background):
+        deltaE=np.abs(energy_isomer-energy_background)
+        if deltaE > 1.5*energy_background: return True
+        else: return False
 
 def main():
     scriptname = 'ashortiso'
     parser = argparse.ArgumentParser()
-    parser.add_argument('filename', type=str, nargs='+', help='Name of the input file.\
-')
-
+    parser.add_argument('filename', type=str, nargs='+', help='Name of the input file.')
     parser.add_argument('-t', '--itime', type=float, help='Injection time.')
     parser.add_argument('-td', '--tdeath', type=float, help='Time in which the isomer will have completly dissapeared after the injection time..')    
     parser.add_argument('-fc', '--fcen', type=float,  help='Frecuency center of the supposed isomer.')
     parser.add_argument('-fs', '--fspan', type=float, , help='Frecuency span around fcenter.')
+    parser.add_argument('-lf', '--lframes', type=int, default='512' , help='Number of frecuency bins.')
     
     parser.add_argument('-v', '--verbose',
 			help='Increase output verbosity', action='store_true')
@@ -61,6 +61,21 @@ def main():
     # here we go:                                                                                       
     log.info(f'File {args.filename} passed for processing the information of {args.refisotope}+{args.re\
 fcharge}.')
+    
+    for file in args.filename:
+        isomer=IsomerIdentification(file, args.itime, args.tdeath, args.fcen, args.fspan, args.lframes)
+        files_with_isomers=0
+        files_without_isomers=0
+        if isomer:
+            save namefile '\x1B[31;1m' '\x1B[0m'
+            files_with_isomers +=files_with_isomers
+        else:
+            save namefile
+            files_without_isomers +=files_with_isomers
+            
+        total_files_analysed=files_with_isomers+files_without_isomers
+        print(f'It has been analysed {total_files_analysed} with isomers present in {files_with_isomers} files and {files_without_isomers} files without evidence of isomers.')
+        
 
 if __name__ == '__main__':
     main()
