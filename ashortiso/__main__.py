@@ -48,8 +48,8 @@ class IsomerIdentification():
         nzz=np.substract(nzz,bg)
         
     def frame_by_frame(xx,yy,zz, method='method1'):
-        for ftime in xx[:,0]:#time
-            for j in range(len(xx[0,:])):#power
+        for i,_ in enumerate(yy[:,0]):#time
+            xx[i,:] zz[i,:]
                 
         
     
