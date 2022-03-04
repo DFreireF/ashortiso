@@ -2,69 +2,108 @@ import argparse
 import logging as log
 #from ashortiso.version import __version__
 from iqtools import *
+from lmfit import *
 import numpy as np
 from datetime import datetime
-from lmfit import *
+import matplotlib.pyplot as plt
+
 
 class IsomerIdentification():
-    def __init__(self, filename,  inyection_time, time, fcen, fspan, lframes):
-        self.fcen=fcen
-        self.fspan=fspan
-        self.itime=inyection_time
-        self.tdeath=time
-        self.filename=filename
-        self.lframes=lframes
-    
-    def _create_spectrogram(self, skip, lframes, method=None):
+    def __init__(self, filename,  initial_time, time_length, fcen, fspan, lframes):
+        self.fcen = fcen
+        self.fspan = fspan
+        self.itime = initial_time
+        self.tdeath = time_length
+        self.filename = filename
+        self.lframes = lframes
+
+    def _create_spectrogram(self, method=None): #i like this one
         iq = get_iq_object(self.filename)
         iq.read_samples(1)
-        nframes=int(self.tdeath*iq.fs/lframes)
-        sframes=int(skip*iq.fs/lframes)
+        nframes = int(self.tdeath*iq.fs/self.lframes)
+        sframes = int(self.itime*iq.fs/self.lframes)
         iq.read(nframes=nframes, lframes=self.lframes, sframes=sframes)
-        iq.method='mtm' #'fft', 'mtm', 'welch'
+        iq.method = 'mtm' #'fft', 'mtm', 'welch'
         if method: iq.method = method
         return iq.get_spectrogram(nframes, self.lframes) #f=x[t,p], t=y[p,f], p=z[t,f]
     
-    @staticmethod
-    def fit_gaussian(x,y,amp,cen,wid):
-        gmod = Model(IsomerIdentification.gaussian)
-        result = gmod.fit(y, x=x, amp=6e-07, cen=0, wid=2e2)
-        nxcen=result.params['cen'].value
-        return nxcen
-    
-    def get_energy_content(self, skip, fcen, fspan):
-        xx,yy,zz= self._create_spectrogram(skip, self.lframes)
-        nxx,nyy,nzz=get_cut_spectrogram(xx, yy, zz, xcen=fcen, xspan=fspan)
+    def _get_averaged_window(self, fcen, fspan, plot=False, savefig=False):
+        xx, yy, zz = self._create_spectrogram()
+        nxx, nyy, nzz = get_cut_spectrogram(xx, yy, zz, xcen=fcen, xspan=fspan)
         axx, ayy, azz = get_averaged_spectrogram(nxx, nyy, nzz, len(nxx[:,0]))
-        return axx, ayy, azz
+        if plot:
+            fig, axs = plt.subplots(3,1)
+            fig.suptitle('Spectrograms + Averaged spectrum')
+            axs[0].plot_spectrogram(xx, yy, zz)
+            axs[1].plot_spectrogram(nxx, nyy, nzz)
+            axs[2].plot_spectrum(axx[0,:], azz[0,:], dbm=True)
+            if savefig: plt.savefig(datetime.now().strftime('%Y.%m.%d_%H.%M.%S')+'.plot.spectrums.pdf')
+        return axx[0,:], azz[0,:]
 
+    def get_isomer_window(self, fspan, fcen=0, fiso=-2e3): #fiso respect mother
+        x, y = self._get_averaged_window(fcen, fspan*10)
+        nxcen, area_gs = fit_gaussian(x, y)
+        xi, yi = get_averaged_window(skip, nxcen-fiso, fspan)
+        return xi, yi, area_gs
+
+    def method_1(self, skip, fspan, fcen=0, tspan=3):
+        xi, yi, area_gsi = self.get_isomer_window(skip, fspan, fcen)
+        energy_isomer_i = IsomerIdentification.energy_in_window(xi, yi)
+        xf, yf, area_gsf = self.get_isomer_window(skip+tspan, fspan, fcen)
+        energy_isomer_f = IsomerIdentification.energy_in_window(xf, yf)
+        isomer=IsomerIdentification.isomer_or_not(energy_isomer_i, energy_isomer_f, factor=energy_isomer_i/energy_isomer_f)
     
-    def method_1(self):
-        axx,ayy,azz= self.get_energy_content(self.itime, self.fcen, self.fspan)
-        axxb,ayy,azzb=self.get_energy_content(self.itime, -1e4, self.fspan)
-        isomer=IsomerIdentification.isomer_or_not(np.average(azz[0,:]), np.average(azzb[0,:]))
-        return isomer
+    @staticmethod
+    def evolution(x, y, z, plot=False, show=True): #x=frec, y=time, z=area (energy)
+        delta_x, delta_y, delta_z= [np.array([]) for i in range(0,3)]
+        for i in range(len(x)-1):
+            delta_x=np.append(delta_x, x[i+1]-x[i])
+            delta_y=np.append(delta_y, (y[i+1]-y[i]) + y[i])
+            delta_e=np.append(delta_e, z[i+1]-z[i])
+        if plot:
+            fig, axs = plt.subplots(2,1, sharex=True)
+            fig.suptitle('Variation of energy and frecuency of a peak with time')
+            axs[0].plot(delta_y, delta_z)
+            axs[1].plot(delta_y, delta_x)
+            if show: plt.show()
+            else: plt.savefig(datetime.now().strftime('%Y.%m.%d_%H.%M.%S')+'.plot.deltas-time.pdf')
 
-    def method2(self):
-        xx,yy,zz=self._create_spectrogram(0)
-        ycen=(self.itime+(self.itime+self.tdeath))/2
-        yspan=ycen-self.itime
-        nxx,nyy,nzz=get_cut_spectrogram(xx,yy,zz,xcen=xcen, xspan=xspan, ycen=ycen, yspan=yspan)
-        bxx,byy,bzz=get_cut_spectrogram(xx,yy,zz,xcen=xcen, xspan=xspan, ycen=ycen, yspan=yspan, invert=True)
-        abxx,abyy,abzz=get_averaged_spectrogram(bxx,byy,bzz, len(bxx[:,0]))
-        bg=np.average(abzz[0,:])
-        nzz=np.substract(nzz,bg)
-        
     @staticmethod
-    def isomer_or_not(isomerE, backgroundE):
-        deltaE=np.abs(isomerE-backgroundE)
-        if deltaE > backgroundE: return True
+    def isomer_or_not(isomer_e, back_e, factor=1):
+        delta_e = np.abs(isomer_e-back_e)
+        if delta_e > factor*back_e: return True
         else: return False
-        
+
     @staticmethod
-    def gaussian(x,amp,cen,wid):
+    def gaussian(x, amp, cen, wid):
         """1-d gaussian: gaussian(x, amp, cen, wid)"""
-        return (amp / (np.sqrt(2*np.pi) * wid)) * np.exp(-(x-cen)**2 / (2*wid**2))
+        return (amp/(np.sqrt(2*np.pi)*wid))*np.exp(-(x-cen)**2/(2*wid**2))
+
+    @staticmethod
+    def fit_gaussian(x, y, amp, cen, wid, plot=False, fit_report=False, savefig=False):
+        gmod = Model(IsomerIdentification.gaussian)
+        result = gmod.fit(y, x = x, amp = 6e-07, cen = 0, wid = 2e2)
+        new_xcen = result.params['cen'].value
+        area = result.params['amp'].value
+        if plot:
+            plt.plot(x, y, 'o', label='data')
+            plt.plot(x, result.init_fit, '--', label='initial fit')
+            plt.plot(x, result.best_fit, '-', label='best fit')
+            plt.show()
+        if fit_report: print(result.fit_report())
+        if savefig: plt.savefig(datetime.now().strftime('%Y.%m.%d_%H.%M.%S')+'.plot.gaussian.pdf')
+        return new_xcen, area
+
+    @staticmethod    
+    def energy_in_window_discrete(x, y):
+        delta_x = x[1]-x[0]
+        return np.sum(y)*delta_x
+
+    @staticmethod    
+    def energy_in_window_cont(x, y):
+        from scipy import integrate
+        return integrate.simpson(y, x)
+
 
 def main():
     scriptname = 'AShortIso'
@@ -86,6 +125,7 @@ def main():
     print(f'Running {scriptname}') #V{__version__}')
     if args.verbose: log.basicConfig(level=log.DEBUG)
     if args.outdir: outfilepath = os.path.join(args.outdir, '')
+    
     # here we go:
     log.info(f'File {args.filename} passed for processing.')
     
