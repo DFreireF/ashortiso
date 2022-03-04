@@ -17,19 +17,19 @@ class IsomerIdentification():
         self.filename = filename
         self.lframes = lframes
 
-    def _create_spectrogram(self, method=None): #i like this one
+    def _create_spectrogram(self, skip, method=None): #i like this one
         iq = get_iq_object(self.filename)
         iq.read_samples(1)
         nframes = int(self.tdeath*iq.fs/self.lframes)
-        sframes = int(self.itime*iq.fs/self.lframes)
+        sframes = int(skip*iq.fs/self.lframes)
         iq.read(nframes=nframes, lframes=self.lframes, sframes=sframes)
         iq.method = 'mtm' #'fft', 'mtm', 'welch'
         if method: iq.method = method
-        return iq.get_spectrogram(nframes, self.lframes) #f=x[t,p], t=y[p,f], p=z[t,f]
+        return iq.get_spectrogram(nframes, self.lframes)
     
-    def _get_averaged_window(self, fcen, fspan, plot=False, savefig=False):
-        xx, yy, zz = self._create_spectrogram()
-        nxx, nyy, nzz = get_cut_spectrogram(xx, yy, zz, xcen=fcen, xspan=fspan)
+    def _get_averaged_window(self, skip, fcen=0, fspan=1.5e3, plot=False, savefig=False):
+        xx, yy, zz = self._create_spectrogram(skip)
+        nxx, nyy, nzz = get_cut_spectrogram(xx, yy, zz,xcen=0, xspan=fspan)
         axx, ayy, azz = get_averaged_spectrogram(nxx, nyy, nzz, len(nxx[:,0]))
         if plot:
             fig, axs = plt.subplots(3,1)
@@ -40,18 +40,19 @@ class IsomerIdentification():
             if savefig: plt.savefig(datetime.now().strftime('%Y.%m.%d_%H.%M.%S')+'.plot.spectrums.pdf')
         return axx[0,:], azz[0,:]
 
-    def get_isomer_window(self, fspan, fcen=0, fiso=-2e3): #fiso respect mother
-        x, y = self._get_averaged_window(fcen, fspan*10)
-        nxcen, area_gs = fit_gaussian(x, y)
-        xi, yi = get_averaged_window(skip, nxcen-fiso, fspan)
+    def get_isomer_window(self, skip, fspan, fcen=0, fiso=-2e3): #fiso respect mother
+        x, y = self._get_averaged_window(skip, fcen, fspan*10, plot=True)
+        nxcen, area_gs = IsomerIdentification.fit_gaussian(x,y, amp=6e-07, cen=2e3, wid=2e2)
+        xi, yi = self._get_averaged_window(skip, nxcen-fiso, fspan, plot=True)
         return xi, yi, area_gs
 
-    def method_1(self, skip, fspan, fcen=0, tspan=3):
-        xi, yi, area_gsi = self.get_isomer_window(skip, fspan, fcen)
-        energy_isomer_i = IsomerIdentification.energy_in_window(xi, yi)
-        xf, yf, area_gsf = self.get_isomer_window(skip+tspan, fspan, fcen)
-        energy_isomer_f = IsomerIdentification.energy_in_window(xf, yf)
+    def method_1(self, fspan, fcen=0, tspan=3):
+        xi, yi, area_gsi = self.get_isomer_window(self.itime, fspan, fcen)
+        energy_isomer_i = IsomerIdentification.energy_in_window_discrete(xi, yi)
+        xf, yf, area_gsf = self.get_isomer_window(self.itime+tspan, fspan, fcen)
+        energy_isomer_f = IsomerIdentification.energy_in_window_discrete(xf, yf)
         isomer=IsomerIdentification.isomer_or_not(energy_isomer_i, energy_isomer_f, factor=energy_isomer_i/energy_isomer_f)
+        return isomer
     
     @staticmethod
     def evolution(x, y, z, plot=False, show=True): #x=frec, y=time, z=area (energy)
@@ -119,16 +120,16 @@ def main():
 			help='Increase output verbosity', action='store_true')
     parser.add_argument('-out', '--outdir', type=str, default='.',
                                                 help='Output directory.')
-    
+
     args = parser.parse_args()
 
     print(f'Running {scriptname}') #V{__version__}')
     if args.verbose: log.basicConfig(level=log.DEBUG)
     if args.outdir: outfilepath = os.path.join(args.outdir, '')
-    
+
     # here we go:
     log.info(f'File {args.filename} passed for processing.')
-    
+
     date_time=datetime.now().strftime('%Y.%m.%d_%H.%M.%S')
     outname=f'{outfilepath}{date_time}-isomers_file.txt'
     fwith_iso=0
@@ -145,9 +146,9 @@ def read_masterfile(master_filename):
     # reads list filenames with experiment data. [:-1] to remove eol sequence.
     return [file[:-1] for file in open(master_filename).readlines()]
 
-def files_with_isomers_or_not(file, inyec_time, timetostudy, fcen, fspan, binning, fwithiso, fwithoutiso, wf):
-    iso=IsomerIdentification(file, args.itime, args.tdeath, args.fcen, args.fspan, args.lframes)
-    isomer=iso.method_1()
+def files_with_isomers_or_not(file, itime, timetostudy, fcen, fspan, binning, fwithiso, fwithoutiso, wf):
+    iso=IsomerIdentification(file, itime, timetostudy, fcen, fspan, binning)
+    isomer=iso.method_1(fspan)
     if isomer:
         np.savetxt(wf,['##ISO##'+file+'##ISO##'], newline='\n', fmt='%s')
         fwithiso = fwithiso+1
@@ -158,7 +159,7 @@ def files_with_isomers_or_not(file, inyec_time, timetostudy, fcen, fspan, binnin
 
 def print_output(fwith,fwithout):
     total_files_analysed=fwith+fwithout
-    print(f'It has been analysed {total_files_analysed} with isomers present in {files_with_isomers} files and {files_without_isomers} files without evidence of isomers.')
+    print(f'It has been analysed {total_files_analysed} with isomers present in {fwith} files and {fwithout} files without evidence of isomers.')
 
 if __name__ == '__main__':
     main()
