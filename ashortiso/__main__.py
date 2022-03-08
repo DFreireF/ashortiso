@@ -6,6 +6,7 @@ from lmfit import *
 import numpy as np
 from datetime import datetime
 import matplotlib.pyplot as plt
+matplotlib.use('TkAgg')
 
 
 class IsomerIdentification():
@@ -27,32 +28,85 @@ class IsomerIdentification():
         if method: iq.method = method
         return iq.get_spectrogram(nframes, self.lframes)
     
-    def _get_averaged_window(self, skip, fcen=0, fspan=1.5e3, plot=False, savefig=False):
+    def _get_averaged_window(self, skip, fcen, fspan, plot=False, savefig=False):
         xx, yy, zz = self._create_spectrogram(skip)
-        nxx, nyy, nzz = get_cut_spectrogram(xx, yy, zz,xcen=0, xspan=fspan)
+        nxx, nyy, nzz = get_cut_spectrogram(xx, yy, zz, xcen = fcen, xspan = fspan)
         axx, ayy, azz = get_averaged_spectrogram(nxx, nyy, nzz, len(nxx[:,0]))
         if plot:
-            fig, axs = plt.subplots(3,1)
-            fig.suptitle('Spectrograms + Averaged spectrum')
-            axs[0].plot_spectrogram(xx, yy, zz)
-            axs[1].plot_spectrogram(nxx, nyy, nzz)
-            axs[2].plot_spectrum(axx[0,:], azz[0,:], dbm=True)
+            #plot_spectrogram(xx, yy, zz)
+            #plt.show()
+            #plot_spectrogram(nxx, nyy, nzz)
+            #plt.show()
+            plot_spectrum(axx[0,:], azz[0,:], dbm=True)
+            plt.pause(0.1)
             if savefig: plt.savefig(datetime.now().strftime('%Y.%m.%d_%H.%M.%S')+'.plot.spectrums.pdf')
+            
         return axx[0,:], azz[0,:]
+    
+    def check_beam(self):
+        x, y = self._get_averaged_window(5.1, 0, 1e4)
+        self.nobeam = False
+        if (np.sum(y) * (x[1] - x[0]) / len(y)) <= 3e-8:#9e-9:
+            self.nobeam = True
+        
+    def get_isomer_window(self, skip, fspan, fcen = 0, fiso = 2e3): #fiso respect mother
+        x, y = self._get_averaged_window(skip, 0, 4e3)
+        nxcen, area_gs, span = IsomerIdentification.fit_gaussian(x, y, amp = 3e-07, cen = 0, wid = 2e2)
+        px, py = self._get_averaged_window(skip, nxcen, span)
+        xi, yi = self._get_averaged_window(skip, nxcen - 2000, span)
+        
+        return xi, yi, px, py
 
-    def get_isomer_window(self, skip, fspan, fcen=0, fiso=-2e3): #fiso respect mother
-        x, y = self._get_averaged_window(skip, fcen, fspan*10, plot=True)
-        nxcen, area_gs = IsomerIdentification.fit_gaussian(x,y, amp=6e-07, cen=2e3, wid=2e2)
-        xi, yi = self._get_averaged_window(skip, nxcen-fiso, fspan, plot=True)
-        return xi, yi, area_gs
-
-    def method_1(self, fspan, fcen=0, tspan=3):
+    def method_1(self, fspan, fcen = 0, tspan=3):
+        
         xi, yi, area_gsi = self.get_isomer_window(self.itime, fspan, fcen)
         energy_isomer_i = IsomerIdentification.energy_in_window_discrete(xi, yi)
         xf, yf, area_gsf = self.get_isomer_window(self.itime+tspan, fspan, fcen)
         energy_isomer_f = IsomerIdentification.energy_in_window_discrete(xf, yf)
-        isomer=IsomerIdentification.isomer_or_not(energy_isomer_i, energy_isomer_f, factor=energy_isomer_i/energy_isomer_f)
+        print(energy_isomer_i, energy_isomer_f)
+        isomer=IsomerIdentification.isomer_or_not(energy_isomer_i, energy_isomer_f, factor=area_gsi/area_gsf)
+        
         return isomer
+    
+    def method_2(self, fspan, fcen=0, tspan=3):
+        energy_isomer_i=np.array([])
+        aux_area=np.array([])
+        for i in range (0,4):
+            skip=self.itime+i/30
+            xi, yi, area_gsi = self.get_isomer_window(skip, fspan, fcen)
+            aux_area=np.append(aux_area, area_gsi)
+            energy_isomer_i = np.append(energy_isomer_i, IsomerIdentification.energy_in_window_discrete(xi, yi))
+        max_index=np.argmax(energy_isomer_i)
+        time_detec=self.itime+max_index/30
+        energy_isomer_i=energy_isomer_i[max_index]
+        xf, yf, area_gsf = self.get_isomer_window(self.itime+tspan, fspan, fcen)
+        energy_isomer_f = IsomerIdentification.energy_in_window_discrete(xf, yf)
+        isomer=IsomerIdentification.isomer_or_not(energy_isomer_i, energy_isomer_f, factor=1.3)#aux_area[max_index]/area_gsf)
+        return isomer, time_detec
+
+    def method_3(self, fspan, factor = 3, fcen = 0, tspan = 3):
+        rel_e=np.array([])
+        for i in range (0,3):
+            skip = self.itime + i / 30
+            xi, yi, pxi, pyi = self.get_isomer_window(skip, fspan)
+#            if self.nobeam:
+#                return False , 0            
+            energy_isomer_i = IsomerIdentification.energy_in_window_discrete(xi, yi)
+            energy_peak = IsomerIdentification.energy_in_window_discrete(pxi, pyi)
+            rel_e = np.append(rel_e, energy_isomer_i / energy_peak)
+            
+        max_index = np.argmax(rel_e)
+        time_detec = self.itime + max_index / 30
+        max_rel = rel_e[max_index]
+        xf, yf, pxf, pyf = self.get_isomer_window(self.itime+tspan, fspan)
+        energy_isomer_f = IsomerIdentification.energy_in_window_discrete(xf, yf)
+        epf = IsomerIdentification.energy_in_window_discrete(pxf, pyf)
+        rel_f = energy_isomer_f / epf
+#        print(max_rel, rel_f)
+        if max_rel > factor * rel_f: isomer = True
+        else: isomer = False
+        return isomer, time_detec
+
     
     @staticmethod
     def evolution(x, y, z, plot=False, show=True): #x=frec, y=time, z=area (energy)
@@ -85,7 +139,11 @@ class IsomerIdentification():
         gmod = Model(IsomerIdentification.gaussian)
         result = gmod.fit(y, x = x, amp = 6e-07, cen = 0, wid = 2e2)
         new_xcen = result.params['cen'].value
+#        error = result.params['cen'].stderr
+#        bad_file = False
+#        if abs(error) > 0.5 * abs(new_xcen): bad_file = True
         area = result.params['amp'].value
+        span = 2*result.params['wid']*np.sqrt(2*np.log(2))
         if plot:
             plt.plot(x, y, 'o', label='data')
             plt.plot(x, result.init_fit, '--', label='initial fit')
@@ -93,7 +151,7 @@ class IsomerIdentification():
             plt.show()
         if fit_report: print(result.fit_report())
         if savefig: plt.savefig(datetime.now().strftime('%Y.%m.%d_%H.%M.%S')+'.plot.gaussian.pdf')
-        return new_xcen, area
+        return new_xcen, area , span#, bad_file
 
     @staticmethod    
     def energy_in_window_discrete(x, y):
@@ -134,32 +192,54 @@ def main():
     outname=f'{outfilepath}{date_time}-isomers_file.txt'
     fwith_iso=0
     fwithout_iso=0
+    f_nobeam=0
     with open(f'{outname}','a') as wf:
         if ('txt') in args.filename[0]:
             filename_list=read_masterfile(args.filename[0])
-            for file in filename_list: fwith_iso, fwithout_iso=files_with_isomers_or_not(file, args.itime, args.tdeath, args.fcen, args.fspan, args.lframes, fwith_iso, fwithout_iso, wf)
+            for file in filename_list: fwith_iso, fwithout_iso, f_nobeam=files_with_isomers_or_not(file, args.itime, args.tdeath, args.fcen, args.fspan, args.lframes, fwith_iso, fwithout_iso, f_nobeam, wf)
         else:
-            for file in args.filename: fwith_iso, fwithout_iso=files_with_isomers_or_not(file, args.itime, args.tdeath, args.fcen, args.fspan, args.lframes, fwith_iso, fwithout_iso, wf)
-        print_output(fwith_iso, fwithout_iso)
+            for file in args.filename: fwith_iso, fwithout_iso, f_nobeam=files_with_isomers_or_not(file, args.itime, args.tdeath, args.fcen, args.fspan, args.lframes, fwith_iso, fwithout_iso, f_nobeam, wf)
+        print_output(fwith_iso, fwithout_iso, f_nobeam)
             
 def read_masterfile(master_filename):
     # reads list filenames with experiment data. [:-1] to remove eol sequence.
     return [file[:-1] for file in open(master_filename).readlines()]
 
-def files_with_isomers_or_not(file, itime, timetostudy, fcen, fspan, binning, fwithiso, fwithoutiso, wf):
+def files_with_isomers_or_not(file, itime, timetostudy, fcen, fspan, binning, fwithiso, fwithoutiso, f_nobeam, wf):
     iso=IsomerIdentification(file, itime, timetostudy, fcen, fspan, binning)
-    isomer=iso.method_1(fspan)
+    iso.check_beam()
+    if iso.nobeam:
+        np.savetxt(wf, [file+' bad file'], newline='\n', fmt='%s')
+        return fwithiso, fwithoutiso, f_nobeam + 1
+#    isomer, time_detc = iso.method_2(fspan)
+    isomer, time_detc = iso.method_3(fspan)
+    #isomer = iso.method_1(fspan)
     if isomer:
-        np.savetxt(wf,['##ISO##'+file+'##ISO##'], newline='\n', fmt='%s')
+        np.savetxt(wf,[file+'  '+str(time_detc)], newline='\n', fmt='%s')
         fwithiso = fwithiso+1
     else:
-        np.savetxt(wf, [file], newline='\n', fmt='%s')
+        np.savetxt(wf, [file+' no iso'], newline='\n', fmt='%s')
         fwithoutiso = fwithoutiso+1
-    return fwithiso, fwithoutiso
+    return fwithiso, fwithoutiso, f_nobeam
 
-def print_output(fwith,fwithout):
-    total_files_analysed=fwith+fwithout
-    print(f'It has been analysed {total_files_analysed} with isomers present in {fwith} files and {fwithout} files without evidence of isomers.')
+def print_output(fwith, fwithout, fno):
+    from rich.console import Console
+    from rich.panel import Panel
+    console = Console()
+    total_files_analysed = fwith + fwithout + fno
+    Files_analysed = f'[bold][yellow] Files analysed: {total_files_analysed}'
+    fiso = f'[green]--> Files with isomers: {fwith}'
+    fwh = f'[green]--> Files without isomers: {fwithout}'
+    fnb = f'[green]--> Files with no beam: {fno}'
+    txt = f'{Files_analysed}\n{fiso}\n{fwh}\n{fnb}'
+    console.print(Panel(txt))
+   
+#    Files analysed:
+#    --> Files with isomers:
+#    --> Files without isomers:
+#    --> Files without beam:
+#    console.print(Panel())
+#    print(f'It has been analysed {total_files_analysed} files with isomers present in {fwith} files, {fwithout} files without evidence of isomers and {fno} files with no beam.')
 
 if __name__ == '__main__':
     main()
