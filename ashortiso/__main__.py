@@ -46,12 +46,13 @@ class IsomerIdentification():
     def check_beam(self):
         x, y = self._get_averaged_window(5.1, 0, 1e4)
         self.nobeam = False
-        if (np.sum(y) * (x[1] - x[0]) / len(y)) <= 3e-8:#9e-9:
+        if (np.sum(y) * (x[1] - x[0]) / len(y)) <= 1e-8:#9e-9:
             self.nobeam = True
         
     def get_isomer_window(self, skip, fspan, fcen = 0, fiso = 2e3): #fiso respect mother
-        x, y = self._get_averaged_window(skip, 0, 4e3)
-        nxcen, area_gs, span = IsomerIdentification.fit_gaussian(x, y, amp = 3e-07, cen = 0, wid = 2e2)
+#        x, y = self._get_averaged_window(skip, 0, 4e3) MORNING
+        x, y = self._get_averaged_window(skip, 0, 2e4)
+        nxcen, area_gs, span = IsomerIdentification.fit_gaussian(x, y, amp = 3e-07, cen = 2e3, wid = 2e2)
         px, py = self._get_averaged_window(skip, nxcen, span)
         xi, yi = self._get_averaged_window(skip, nxcen - 2000, span)
         
@@ -84,7 +85,7 @@ class IsomerIdentification():
         isomer=IsomerIdentification.isomer_or_not(energy_isomer_i, energy_isomer_f, factor=1.3)#aux_area[max_index]/area_gsf)
         return isomer, time_detec
 
-    def method_3(self, fspan, factor = 3, fcen = 0, tspan = 3):
+    def method_3(self, fspan, factor = 10, fcen = 0, tspan = 3): #factor 3 for 06 am
         rel_e=np.array([])
         for i in range (0,3):
             skip = self.itime + i / 30
